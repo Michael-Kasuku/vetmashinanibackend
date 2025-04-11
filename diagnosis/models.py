@@ -9,9 +9,11 @@ class User(models.Model):
     password = models.CharField(max_length=128)
     location_lat = models.FloatField(null=True, blank=True)
     location_lng = models.FloatField(null=True, blank=True)
+    wallet_balance = models.FloatField(default=0.0)
 
     def __str__(self):
         return self.username
+
 
 class VeterinarianProfile(models.Model):
     id = models.AutoField(primary_key=True)
@@ -87,3 +89,55 @@ class Rating(models.Model):
 
     def __str__(self):
         return f"Rating by {self.farmer.username} to {self.vet.username}"
+
+class CoinReward(models.Model):
+    COIN_TO_KSH = 25
+    MAX_BALANCES = {
+        'farmer': 1000000,
+        'vet': 3000000
+    }
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='coin_reward')
+    coins = models.IntegerField(default=0)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.coins} Coins"
+
+    def add_coins(self, amount):
+        role = 'farmer' if self.user.is_farmer else 'vet' if self.user.is_vet else None
+        max_balance = self.MAX_BALANCES.get(role, 0)
+        if self.coins + amount > max_balance:
+            raise ValueError(f"Exceeds max balance for {role}.")
+        self.coins += amount
+        self.save()
+
+    def subtract_coins(self, amount):
+        if self.coins >= amount:
+            self.coins -= amount
+            self.save()
+        else:
+            raise ValueError("Insufficient coins to withdraw.")
+
+class PlatformCoin(models.Model):
+    COIN_TO_KSH = 25  # The conversion rate from coins to Ksh
+    MAX_BALANCE = 10000000
+
+    id = models.AutoField(primary_key=True)
+    coins = models.IntegerField(default=0)
+
+    def __str__(self):
+        balance_in_ksh = self.coins / self.COIN_TO_KSH  # Corrected division instead of multiplication
+        return f"Vet Mashinani Platform - {self.coins} Coins (Ksh {balance_in_ksh})"
+
+    def add_coins(self, amount):
+        if self.coins + amount > self.MAX_BALANCE:
+            raise ValueError("Platform coin limit exceeded.")
+        self.coins += amount
+        self.save()
+
+    def subtract_coins(self, amount):
+        if self.coins >= amount:
+            self.coins -= amount
+            self.save()
+        else:
+            raise ValueError("Insufficient platform coin balance.")

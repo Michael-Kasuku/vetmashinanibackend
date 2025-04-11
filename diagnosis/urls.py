@@ -8,6 +8,8 @@ from .views import (
     rate_vet,
     nearby_vets,
     predict_disease,
+    deposit_coins,
+    withdraw_coins
 )
 
 urlpatterns = [
@@ -20,4 +22,6 @@ urlpatterns = [
     path('ratings/', rate_vet, name="rate_vet"),
     path('vets/nearby/', nearby_vets, name="nearby_vets"),
     path("predict/disease/", predict_disease, name="predict_disease"),
+    path("deposit/coins/", deposit_coins, name="deposit_coins"),
+    path("withdraw/coins/", withdraw_coins, name="withdraw_coins"),
 ]

@@ -13,7 +13,7 @@ from geopy.distance import geodesic
 from django.contrib.auth.hashers import make_password, check_password
 
 # Local app imports
-from .models import User, VeterinarianProfile, FarmerProfile, Appointment, Notification, Favorite, Rating
+from .models import User, VeterinarianProfile, FarmerProfile, Appointment, Notification, Favorite, Rating, CoinReward, PlatformCoin
 
 # Django timezone import
 from django.utils import timezone
@@ -55,8 +55,12 @@ def signup(request):
         # Create related profile based on user type
         if is_vet:
             VeterinarianProfile.objects.create(user=user)
+            # Add 200 coins for veterinarians on signup
+            CoinReward.objects.create(user=user, coins=200)
         elif is_farmer:
             FarmerProfile.objects.create(user=user)
+            # Add 100 coins for farmers on signup
+            CoinReward.objects.create(user=user, coins=100)
 
         return JsonResponse({"message": "User created successfully!"}, status=201)
 
@@ -202,7 +206,7 @@ def login(request):
 def appointments(request):
     if request.method == 'GET':
         user_id = request.GET.get('user_id')
-        role = request.GET.get('role')  # 'farmer' or 'vet'
+        role = request.GET.get('role')
 
         if not user_id or not role:
             return HttpResponseBadRequest("Missing user_id or role")
@@ -224,7 +228,7 @@ def appointments(request):
                 'location_lng': a.location_lng,
                 'farmer_note': a.farmer_note,
                 'vet_note': a.vet_note,
-                'vet_status_updated_at': a.vet_status_updated_at,  # Include the new field
+                'vet_status_updated_at': a.vet_status_updated_at,
             } for a in appointments
         ]
         return JsonResponse(data, safe=False)
@@ -234,6 +238,22 @@ def appointments(request):
         try:
             farmer = User.objects.get(pk=data['farmer_id'])
             vet = User.objects.get(pk=data['vet_id'])
+
+            # Handle coin balances
+            farmer_coins, _ = CoinReward.objects.get_or_create(user=farmer)
+
+            # Deduct 5 coins
+            farmer_coins.subtract_coins(5)
+
+            # Reward vet 2 coins
+            vet_coins, _ = CoinReward.objects.get_or_create(user=vet)
+            vet_coins.add_coins(2)
+
+            # Add 3 coins to platform balance
+            platform_coin, _ = PlatformCoin.objects.get_or_create(id=1)
+            platform_coin.add_coins(3)
+
+            # Create appointment
             appointment = Appointment.objects.create(
                 farmer=farmer,
                 vet=vet,
@@ -242,16 +262,17 @@ def appointments(request):
                 location_lng=data.get('location_lng'),
                 farmer_note=data.get('farmer_note', '')
             )
-            # Send notification to vet about the new appointment
+
+            # Send notifications
             Notification.objects.create(
                 recipient=vet,
                 message=f"New appointment created with {farmer.username}"
             )
-            # Send notification to farmer about the new appointment
             Notification.objects.create(
                 recipient=farmer,
                 message=f"Your appointment with {vet.username} has been scheduled."
             )
+
             return JsonResponse({'message': 'Appointment created', 'id': appointment.id})
         except Exception as e:
             return HttpResponseBadRequest(str(e))
@@ -266,24 +287,19 @@ def appointments(request):
         if not appointment_id or not status or not vet_note or not vet_id:
             return HttpResponseBadRequest("Missing appointment_id, status, vet_note, or vet_id.")
 
-        # Ensure the appointment exists
         appointment = get_object_or_404(Appointment, id=appointment_id)
 
-        # Ensure the vet is the one updating the appointment
         if appointment.vet.id != vet_id:
             return JsonResponse({"error": "This is not your appointment to update."}, status=403)
 
-        # Update the status and vet's note
         appointment.status = status
         appointment.vet_note = vet_note
-        
-        # Set the timestamp when vet accepts or cancels the appointment
+
         if status in ['accepted', 'cancelled']:
-            appointment.vet_status_updated_at = timezone.now()  # Set the timestamp
+            appointment.vet_status_updated_at = timezone.now()
 
         appointment.save()
 
-        # Send notification to the farmer about the updated appointment
         Notification.objects.create(
             recipient=appointment.farmer,
             message=f"Your appointment with {appointment.vet.username} has been updated. Status: {status}"
@@ -436,3 +452,94 @@ def predict_disease(request):
             return JsonResponse({"error": str(e)}, status=500)
 
     return JsonResponse({"error": "Invalid request method"}, status=400)
+
+"""
+Reward System 
+Deposit to wallet simply means get money from Mpesa
+Withdraw from wallet simply means send money to mpesa
+Deposit coins simply means get money from wallet
+Withdraw coins simply means send money to wallet
+"""
+COIN_TO_KSH = 25
+MIN_WITHDRAWAL_COINS = 50
+MAX_DEPOSIT_COINS = 10000
+
+@csrf_exempt
+def deposit_coins(request):
+    if request.method != 'POST':
+        return HttpResponseBadRequest("Invalid request method.")
+
+    data = json.loads(request.body)
+    user_id = data.get('user_id')
+    deposit_coins = data.get('coins')
+    wallet_ksh = data.get('wallet_balance')
+
+    if not user_id or deposit_coins is None or wallet_ksh is None:
+        return HttpResponseBadRequest("Missing user_id, coins, or wallet_balance.")
+
+    if deposit_coins > MAX_DEPOSIT_COINS:
+        return JsonResponse({'error': f'Maximum of {MAX_DEPOSIT_COINS} coins allowed per deposit.'}, status=400)
+
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({'error': 'User not found.'}, status=404)
+
+    required_ksh = deposit_coins / COIN_TO_KSH
+    if wallet_ksh < required_ksh:
+        return JsonResponse({'error': 'Insufficient wallet balance.'}, status=400)
+
+    coin_reward, _ = CoinReward.objects.get_or_create(user=user)
+
+    # Update the user's wallet balance
+    user.wallet_balance -= required_ksh
+    user.save()
+
+    try:
+        coin_reward.add_coins(deposit_coins)
+    except ValueError as e:
+        return JsonResponse({'error': str(e)}, status=400)
+
+    return JsonResponse({
+        'message': f'{deposit_coins} coins deposited successfully.',
+        'new_coin_balance': coin_reward.coins,
+        'new_wallet_balance': user.wallet_balance
+    })
+
+
+@csrf_exempt
+def withdraw_coins(request):
+    if request.method != 'POST':
+        return HttpResponseBadRequest("Invalid request method.")
+
+    data = json.loads(request.body)
+    user_id = data.get('user_id')
+    withdraw_coins = data.get('coins')
+
+    if not user_id or withdraw_coins is None:
+        return HttpResponseBadRequest("Missing user_id or coins amount.")
+
+    if withdraw_coins < MIN_WITHDRAWAL_COINS:
+        return JsonResponse({'error': f'Minimum withdrawal is {MIN_WITHDRAWAL_COINS} coins.'}, status=400)
+
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({'error': 'User not found.'}, status=404)
+
+    coin_reward, _ = CoinReward.objects.get_or_create(user=user)
+
+    try:
+        coin_reward.subtract_coins(withdraw_coins)
+    except ValueError as e:
+        return JsonResponse({'error': str(e)}, status=400)
+
+    withdrawn_ksh = withdraw_coins / COIN_TO_KSH
+
+    # Update the user's wallet balance
+    user.wallet_balance += withdrawn_ksh
+    user.save()
+
+    return JsonResponse({
+        'message': f'{withdraw_coins} coins withdrawn successfully. You have received KES {withdrawn_ksh}.',
+        'new_coin_balance': coin_reward.coins,
+        'new_wallet_balance': user.wallet_balance
+    })
