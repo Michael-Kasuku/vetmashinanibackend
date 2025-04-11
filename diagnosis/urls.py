@@ -9,7 +9,8 @@ from .views import (
     nearby_vets,
     predict_disease,
     deposit_coins,
-    withdraw_coins
+    withdraw_coins,
+    get_wallet_balance
 )
 
 urlpatterns = [
@@ -24,4 +25,5 @@ urlpatterns = [
     path("predict/disease/", predict_disease, name="predict_disease"),
     path("deposit/coins/", deposit_coins, name="deposit_coins"),
     path("withdraw/coins/", withdraw_coins, name="withdraw_coins"),
+    path('get-wallet-balance/', get_wallet_balance, name='get_wallet_balance'),
 ]

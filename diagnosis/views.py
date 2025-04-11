@@ -543,3 +543,17 @@ def withdraw_coins(request):
         'new_coin_balance': coin_reward.coins,
         'new_wallet_balance': user.wallet_balance
     })
+
+@csrf_exempt
+def get_wallet_balance(request):
+    if request.method == 'GET':
+        username = request.GET.get('username')  # Get the username from query parameters
+
+        if not username:
+            return JsonResponse({"error": "Username is required."}, status=400)
+
+        try:
+            user = User.objects.get(username=username)  # Fetch the user from the database
+            return JsonResponse({"wallet_balance": user.wallet_balance}, status=200)
+        except User.DoesNotExist:
+            return JsonResponse({"error": "User not found."}, status=404)
