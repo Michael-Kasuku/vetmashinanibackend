@@ -52,6 +52,7 @@ class Appointment(models.Model):
     location_lng = models.FloatField(null=True, blank=True)
     farmer_note = models.TextField(blank=True, null=True)
     vet_note = models.TextField(blank=True, null=True)
+    time_sent = models.DateTimeField(auto_now_add=True)  # New field to record time when the appointment is created
 
     def __str__(self):
         return f"Appointment between {self.farmer} and {self.vet} on {self.appointment_date}"

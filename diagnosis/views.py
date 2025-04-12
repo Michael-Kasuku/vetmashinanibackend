@@ -11,6 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import get_object_or_404
 from geopy.distance import geodesic
 from django.contrib.auth.hashers import make_password, check_password
+from django.db.models import Q
 
 # Local app imports
 from .models import User, VeterinarianProfile, FarmerProfile, Appointment, Notification, Favorite, Rating, CoinReward, PlatformCoin
@@ -232,12 +233,16 @@ def appointments(request):
             } for a in appointments
         ]
         return JsonResponse(data, safe=False)
-
     elif request.method == 'POST':
         data = json.loads(request.body)
         try:
-            farmer = User.objects.get(pk=data['farmer_id'])
-            vet = User.objects.get(pk=data['vet_id'])
+            # Fetch the farmer and vet using their usernames
+            farmer = User.objects.get(username=data['farmer_username'])
+            vet = User.objects.get(username=data['vet_username'])
+
+            # Check if the farmer has location data
+            location_lat = farmer.location_lat
+            location_lng = farmer.location_lng
 
             # Handle coin balances
             farmer_coins, _ = CoinReward.objects.get_or_create(user=farmer)
@@ -253,13 +258,13 @@ def appointments(request):
             platform_coin, _ = PlatformCoin.objects.get_or_create(id=1)
             platform_coin.add_coins(3)
 
-            # Create appointment
+            # Create appointment with current timestamp
             appointment = Appointment.objects.create(
                 farmer=farmer,
                 vet=vet,
-                appointment_date=data['appointment_date'],
-                location_lat=data.get('location_lat'),
-                location_lng=data.get('location_lng'),
+                appointment_date=timezone.now(),  # Set to current timestamp
+                location_lat=location_lat,  # Use the farmer's stored location
+                location_lng=location_lng,  # Use the farmer's stored location
                 farmer_note=data.get('farmer_note', '')
             )
 
@@ -276,7 +281,6 @@ def appointments(request):
             return JsonResponse({'message': 'Appointment created', 'id': appointment.id})
         except Exception as e:
             return HttpResponseBadRequest(str(e))
-
     elif request.method == 'PUT':
         data = json.loads(request.body)
         appointment_id = data.get('appointment_id')
@@ -324,33 +328,6 @@ def notifications(request, user_id):
         return JsonResponse(data, safe=False)
 
     return HttpResponseNotAllowed(['GET'])
-
-@csrf_exempt
-def favorites(request, user_id=None):
-    if request.method == 'GET' and user_id:
-        favs = Favorite.objects.filter(user_id=user_id)
-        data = [
-            {
-                'id': f.id,
-                'favorite_user_id': f.favorite_user.id,
-                'favorite_user_username': f.favorite_user.username
-            } for f in favs
-        ]
-        return JsonResponse(data, safe=False)
-
-    elif request.method == 'POST':
-        data = json.loads(request.body)
-        try:
-            user = User.objects.get(pk=data['user_id'])
-            fav_user = User.objects.get(pk=data['favorite_user_id'])
-            favorite, created = Favorite.objects.get_or_create(user=user, favorite_user=fav_user)
-            if created:
-                return JsonResponse({'message': 'Favorite added'})
-            return JsonResponse({'message': 'Already favorited'})
-        except Exception as e:
-            return HttpResponseBadRequest(str(e))
-
-    return HttpResponseNotAllowed(['GET', 'POST'])
 
 @csrf_exempt
 def rate_vet(request):
@@ -402,12 +379,19 @@ def rate_vet(request):
 @csrf_exempt
 def nearby_vets(request):
     if request.method == 'GET':
-        lat = request.GET.get('lat')
-        lng = request.GET.get('lng')
-        if not lat or not lng:
-            return HttpResponseBadRequest("Missing coordinates")
+        username = request.GET.get('username')
+        if not username:
+            return HttpResponseBadRequest("Missing username")
 
-        lat, lng = float(lat), float(lng)
+        try:
+            user = User.objects.get(username=username, is_farmer=True)
+            if user.location_lat is None or user.location_lng is None:
+                return HttpResponseBadRequest("User location not set")
+        except User.DoesNotExist:
+            return HttpResponseBadRequest("Farmer not found")
+
+        lat, lng = float(user.location_lat), float(user.location_lng)
+
         all_vets = User.objects.filter(is_vet=True, location_lat__isnull=False, location_lng__isnull=False)
 
         data = []
@@ -420,6 +404,7 @@ def nearby_vets(request):
                     'email': vet.email,
                     'distance_km': round(distance, 2)
                 })
+
         return JsonResponse(data, safe=False)
 
     return HttpResponseNotAllowed(['GET'])
@@ -553,7 +538,125 @@ def get_wallet_balance(request):
             return JsonResponse({"error": "Username is required."}, status=400)
 
         try:
-            user = User.objects.get(username=username)  # Fetch the user from the database
+            user = User.objects.get(username=username)  # Fetch the user using the username
             return JsonResponse({"wallet_balance": user.wallet_balance}, status=200)
         except User.DoesNotExist:
             return JsonResponse({"error": "User not found."}, status=404)
+
+@csrf_exempt
+def get_coin_balance(request):
+    if request.method == 'GET':
+        username = request.GET.get('username')  # Get the username from query parameters
+
+        if not username:
+            return JsonResponse({"error": "Username is required."}, status=400)
+
+        try:
+            user = User.objects.get(username=username)  # Fetch the user using the username
+            coin_reward = CoinReward.objects.get(user=user)  # Fetch the CoinReward for the user
+            return JsonResponse({"coin_balance": coin_reward.coins}, status=200)
+        except User.DoesNotExist:
+            return JsonResponse({"error": "User not found."}, status=404)
+        except CoinReward.DoesNotExist:
+            return JsonResponse({"error": "Coin reward record not found."}, status=404)
+
+
+@csrf_exempt
+def get_upcoming_appointments(request):
+    if request.method == 'GET':
+        username = request.GET.get('username')  # Get the username from query parameters
+
+        if not username:
+            return JsonResponse({"error": "Username is required."}, status=400)
+
+        try:
+            user = User.objects.get(username=username)  # Fetch the user using the username
+            
+            # Fetch the upcoming appointments for the user, either as a farmer or vet
+            upcoming_appointments = Appointment.objects.filter(
+                (Q(farmer=user) | Q(vet=user)) & Q(appointment_date__gte=timezone.now())
+            ).order_by('appointment_date')
+
+            total_upcoming = upcoming_appointments.count()  # Get the total count of upcoming appointments
+
+            if total_upcoming == 0:
+                return JsonResponse({"message": "No upcoming appointments.", "total_upcoming": total_upcoming}, status=200)
+            
+            appointments_list = []
+            for appointment in upcoming_appointments:
+                appointments_list.append({
+                    "id": appointment.id,
+                    "farmer": appointment.farmer.username,
+                    "vet": appointment.vet.username,
+                    "appointment_date": appointment.appointment_date,
+                    "status": appointment.status,
+                    "location_lat": appointment.location_lat,
+                    "location_lng": appointment.location_lng,
+                    "farmer_note": appointment.farmer_note,
+                    "vet_note": appointment.vet_note,
+                })
+
+            return JsonResponse({
+                "total_upcoming": total_upcoming,  # Return the total count of upcoming appointments
+                "upcoming_appointments": appointments_list
+            }, status=200)
+        
+        except User.DoesNotExist:
+            return JsonResponse({"error": "User not found."}, status=404)
+
+@csrf_exempt
+def favorite_vets(request):
+    if request.method == 'GET':
+        username = request.GET.get('username')
+
+        if not username:
+            return JsonResponse({"error": "Username is required."}, status=400)
+        
+        try:
+            user = User.objects.get(username=username)  # Use your custom User model if necessary
+        except User.DoesNotExist:
+            return JsonResponse({'detail': 'User not found.'}, status=404)
+
+        favorites = Favorite.objects.filter(user=user).select_related('favorite_user')
+        favorite_vets = [
+            {
+                'username': fav.favorite_user.username,
+            }
+            for fav in favorites
+        ]
+
+        return JsonResponse(favorite_vets, safe=False, status=200)
+    
+    return JsonResponse({'detail': 'Method not allowed.'}, status=405)
+
+@csrf_exempt
+def add_favorite(request):
+    if request.method == 'POST':
+        # Get data from the request body
+        data = request.POST
+        username = data.get('username')
+        favorite_username = data.get('favorite_username')
+
+        if not username or not favorite_username:
+            return JsonResponse({"error": "Both 'username' and 'favorite_username' are required."}, status=400)
+        
+        try:
+            user = User.objects.get(username=username)  # Current user
+        except User.DoesNotExist:
+            return JsonResponse({'detail': 'User not found.'}, status=404)
+        
+        try:
+            favorite_user = User.objects.get(username=favorite_username)  # User to be added as favorite
+        except User.DoesNotExist:
+            return JsonResponse({'detail': 'Favorite user not found.'}, status=404)
+
+        # Check if the user has already added this user as a favorite
+        if Favorite.objects.filter(user=user, favorite_user=favorite_user).exists():
+            return JsonResponse({'detail': 'This user is already in your favorites.'}, status=400)
+
+        # Create the Favorite entry
+        Favorite.objects.create(user=user, favorite_user=favorite_user)
+
+        return JsonResponse({'detail': f'{favorite_username} has been added to your favorites.'}, status=201)
+    
+    return JsonResponse({'detail': 'Method not allowed.'}, status=405)
