@@ -6,7 +6,7 @@ import json
 # Third-party imports
 import numpy as np
 from django.conf import settings
-from django.http import JsonResponse, HttpResponseBadRequest, HttpResponseNotAllowed
+from django.http import JsonResponse, HttpResponseNotAllowed, HttpResponseBadRequest, HttpResponseNotFound
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import get_object_or_404
 from geopy.distance import geodesic
@@ -314,20 +314,54 @@ def appointments(request):
     return HttpResponseNotAllowed(['GET', 'POST', 'PUT'])
 
 @csrf_exempt
-def notifications(request, user_id):
-    if request.method == 'GET':
-        notes = Notification.objects.filter(recipient_id=user_id).order_by('-created_at')
-        data = [
-            {
-                'id': n.id,
-                'message': n.message,
-                'created_at': n.created_at,
-                'is_read': n.is_read
-            } for n in notes
-        ]
-        return JsonResponse(data, safe=False)
+def get_notifications(request):
+    if request.method != 'GET':
+        return HttpResponseNotAllowed(['GET'])
 
-    return HttpResponseNotAllowed(['GET'])
+    try:
+        username = request.GET.get('username')  # Get the username from query parameters
+
+        if not username:
+            return JsonResponse({"error": "Username is required."}, status=400)
+        
+        user = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return HttpResponseNotFound("User not found")
+
+    notes = Notification.objects.filter(recipient=user).order_by('-created_at')
+    data = [
+        {
+            'id': n.id,
+            'message': n.message,
+            'created_at': n.created_at,
+            'is_read': n.is_read
+        } for n in notes
+    ]
+    return JsonResponse(data, safe=False)
+
+@csrf_exempt
+def mark_notification_as_read(request):
+    if request.method == 'PATCH':
+        try:
+            # Parse the JSON body
+            body = json.loads(request.body)
+            notification_id = body.get('notification_id')
+
+            # Get the notification object or return 404 if it doesn't exist
+            notification = get_object_or_404(Notification, id=notification_id)
+
+            # Mark the notification as read
+            notification.is_read = True
+            notification.save()
+
+            # Return success response
+            return JsonResponse({'status': 'success', 'message': 'Notification marked as read'})
+
+        except Exception as e:
+            # Handle error (invalid or missing notification ID)
+            return JsonResponse({'status': 'error', 'message': str(e)})
+
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
 
 @csrf_exempt
 def rate_vet(request):

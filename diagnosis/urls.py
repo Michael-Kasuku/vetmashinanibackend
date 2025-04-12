@@ -3,7 +3,6 @@ from .views import (
     signup,
     login,
     appointments,
-    notifications,
     rate_vet,
     nearby_vets,
     predict_disease,
@@ -13,14 +12,15 @@ from .views import (
     get_coin_balance,
     get_upcoming_appointments,
     favorite_vets,
-    add_favorite
+    add_favorite,
+    get_notifications,
+    mark_notification_as_read
 )
 
 urlpatterns = [
     path('signup/', signup, name="signup"),
     path('login/', login, name="login"),
     path('appointments/', appointments, name="appointments_list"),
-    path('notifications/<int:user_id>/', notifications, name="user_notifications"),
     path('ratings/', rate_vet, name="rate_vet"),
     path('vets/nearby/', nearby_vets, name="nearby_vets"),
     path("predict/disease/", predict_disease, name="predict_disease"),
@@ -31,4 +31,6 @@ urlpatterns = [
     path('get-upcoming-appointments/', get_upcoming_appointments, name='get-upcoming-appointments'),
     path('favorite-vets/', favorite_vets, name='favorite-vets'),
     path('add-favorite/', add_favorite, name='add-favorite'),
+    path('get-notifications/', get_notifications, name='get-notifications'),
+    path('mark-notification-as-read/', mark_notification_as_read, name='mark-notification-as-read'),
 ]
