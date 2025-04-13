@@ -14,7 +14,7 @@ from django.contrib.auth.hashers import make_password, check_password
 from django.db.models import Q
 
 # Local app imports
-from .models import User, VeterinarianProfile, FarmerProfile, Appointment, Notification, Favorite, Rating, CoinReward, PlatformCoin
+from .models import User,CertifiedVet, VeterinarianProfile, FarmerProfile, Appointment, Notification, Favorite, Rating, CoinReward, PlatformCoin
 
 # Django timezone import
 from django.utils import timezone
@@ -23,48 +23,59 @@ from django.utils import timezone
 def signup(request):
     if request.method == 'POST':
         data = json.loads(request.body)
-        
-        # Basic fields for user creation
+
+        # Extract fields
         username = data.get('username')
         email = data.get('email')
         password = data.get('password')
         is_farmer = data.get('is_farmer', False)
         is_vet = data.get('is_vet', False)
-        location_lat = data.get('location_lat', None)
-        location_lng = data.get('location_lng', None)
-        
-        # Check if user with the same username or email exists
+        location_lat = data.get('location_lat')
+        location_lng = data.get('location_lng')
+
+        # Check if username or email already exists
         if User.objects.filter(username=username).exists():
             return JsonResponse({"error": "Username already taken."}, status=400)
-        
+
         if User.objects.filter(email=email).exists():
             return JsonResponse({"error": "Email already in use."}, status=400)
-        
-        # Create the user object
-        user = User(
+
+        # If user is a vet, ensure email exists in CertifiedVet table
+        if is_vet and not CertifiedVet.objects.filter(email=email).exists():
+            return JsonResponse({"error": "Email not found in Certified Veterinarians registry."}, status=403)
+
+        # Determine coin bonus
+        bonus_coins = 200 if is_vet else 100 if is_farmer else 0
+
+        # Deduct coins from platform account
+        try:
+            platform = PlatformCoin.objects.first()
+            if platform is None:
+                return JsonResponse({"error": "PlatformCoin account not initialized."}, status=500)
+            platform.subtract_coins(bonus_coins)
+        except ValueError as ve:
+            return JsonResponse({"error": str(ve)}, status=400)
+
+        # Create the user
+        user = User.objects.create(
             username=username,
             email=email,
-            password=make_password(password),  # Hash the password before saving
+            password=make_password(password),
             is_farmer=is_farmer,
             is_vet=is_vet,
             location_lat=location_lat,
             location_lng=location_lng
         )
-        
-        user.save()
 
-        # Create related profile based on user type
+        # Create related profile and reward
         if is_vet:
             VeterinarianProfile.objects.create(user=user)
-            # Add 200 coins for veterinarians on signup
-            CoinReward.objects.create(user=user, coins=200)
         elif is_farmer:
             FarmerProfile.objects.create(user=user)
-            # Add 100 coins for farmers on signup
-            CoinReward.objects.create(user=user, coins=100)
+
+        CoinReward.objects.create(user=user, coins=bonus_coins)
 
         return JsonResponse({"message": "User created successfully!"}, status=201)
-
     elif request.method == 'PUT':
         data = json.loads(request.body)
         
@@ -489,27 +500,26 @@ def deposit_coins(request):
         return HttpResponseBadRequest("Invalid request method.")
 
     data = json.loads(request.body)
-    user_id = data.get('user_id')
+    username = data.get('username')
     deposit_coins = data.get('coins')
-    wallet_ksh = data.get('wallet_balance')
 
-    if not user_id or deposit_coins is None or wallet_ksh is None:
-        return HttpResponseBadRequest("Missing user_id, coins, or wallet_balance.")
+    if not username or deposit_coins is None:
+        return HttpResponseBadRequest("Missing username or coins.")
 
     if deposit_coins > MAX_DEPOSIT_COINS:
         return JsonResponse({'error': f'Maximum of {MAX_DEPOSIT_COINS} coins allowed per deposit.'}, status=400)
 
-    user = User.objects.filter(id=user_id).first()
+    user = User.objects.filter(username=username).first()
     if not user:
         return JsonResponse({'error': 'User not found.'}, status=404)
 
     required_ksh = deposit_coins / COIN_TO_KSH
-    if wallet_ksh < required_ksh:
+    if user.wallet_balance < required_ksh:
         return JsonResponse({'error': 'Insufficient wallet balance.'}, status=400)
 
     coin_reward, _ = CoinReward.objects.get_or_create(user=user)
 
-    # Update the user's wallet balance
+    # Deduct from wallet and add coins
     user.wallet_balance -= required_ksh
     user.save()
 
@@ -518,12 +528,17 @@ def deposit_coins(request):
     except ValueError as e:
         return JsonResponse({'error': str(e)}, status=400)
 
+    # ✅ Create notification
+    Notification.objects.create(
+        recipient=user,
+        message=f"You deposited {deposit_coins} coins (KES {required_ksh:.2f}) from your wallet."
+    )
+
     return JsonResponse({
         'message': f'{deposit_coins} coins deposited successfully.',
         'new_coin_balance': coin_reward.coins,
         'new_wallet_balance': user.wallet_balance
     })
-
 
 @csrf_exempt
 def withdraw_coins(request):
@@ -531,16 +546,16 @@ def withdraw_coins(request):
         return HttpResponseBadRequest("Invalid request method.")
 
     data = json.loads(request.body)
-    user_id = data.get('user_id')
+    username = data.get('username')
     withdraw_coins = data.get('coins')
 
-    if not user_id or withdraw_coins is None:
-        return HttpResponseBadRequest("Missing user_id or coins amount.")
+    if not username or withdraw_coins is None:
+        return HttpResponseBadRequest("Missing username or coins amount.")
 
     if withdraw_coins < MIN_WITHDRAWAL_COINS:
         return JsonResponse({'error': f'Minimum withdrawal is {MIN_WITHDRAWAL_COINS} coins.'}, status=400)
 
-    user = User.objects.filter(id=user_id).first()
+    user = User.objects.filter(username=username).first()
     if not user:
         return JsonResponse({'error': 'User not found.'}, status=404)
 
@@ -556,6 +571,12 @@ def withdraw_coins(request):
     # Update the user's wallet balance
     user.wallet_balance += withdrawn_ksh
     user.save()
+
+    # ✅ Create notification
+    Notification.objects.create(
+        recipient=user,
+        message=f"You withdrew {withdraw_coins} coins (KES {withdrawn_ksh:.2f}) to your wallet."
+    )
 
     return JsonResponse({
         'message': f'{withdraw_coins} coins withdrawn successfully. You have received KES {withdrawn_ksh}.',
@@ -593,50 +614,6 @@ def get_coin_balance(request):
             return JsonResponse({"error": "User not found."}, status=404)
         except CoinReward.DoesNotExist:
             return JsonResponse({"error": "Coin reward record not found."}, status=404)
-
-
-@csrf_exempt
-def get_upcoming_appointments(request):
-    if request.method == 'GET':
-        username = request.GET.get('username')  # Get the username from query parameters
-
-        if not username:
-            return JsonResponse({"error": "Username is required."}, status=400)
-
-        try:
-            user = User.objects.get(username=username)  # Fetch the user using the username
-            
-            # Fetch the upcoming appointments for the user, either as a farmer or vet
-            upcoming_appointments = Appointment.objects.filter(
-                (Q(farmer=user) | Q(vet=user)) & Q(appointment_date__gte=timezone.now())
-            ).order_by('appointment_date')
-
-            total_upcoming = upcoming_appointments.count()  # Get the total count of upcoming appointments
-
-            if total_upcoming == 0:
-                return JsonResponse({"message": "No upcoming appointments.", "total_upcoming": total_upcoming}, status=200)
-            
-            appointments_list = []
-            for appointment in upcoming_appointments:
-                appointments_list.append({
-                    "id": appointment.id,
-                    "farmer": appointment.farmer.username,
-                    "vet": appointment.vet.username,
-                    "appointment_date": appointment.appointment_date,
-                    "status": appointment.status,
-                    "location_lat": appointment.location_lat,
-                    "location_lng": appointment.location_lng,
-                    "farmer_note": appointment.farmer_note,
-                    "vet_note": appointment.vet_note,
-                })
-
-            return JsonResponse({
-                "total_upcoming": total_upcoming,  # Return the total count of upcoming appointments
-                "upcoming_appointments": appointments_list
-            }, status=200)
-        
-        except User.DoesNotExist:
-            return JsonResponse({"error": "User not found."}, status=404)
 
 @csrf_exempt
 def favorite_vets(request):
