@@ -14,7 +14,7 @@ from django.contrib.auth.hashers import make_password, check_password
 from django.db.models import Q
 
 # Local app imports
-from .models import User,CertifiedVet, VeterinarianProfile, FarmerProfile, Appointment, Notification, Favorite, Rating, CoinReward, PlatformCoin
+from .models import User,CertifiedVet, VeterinarianProfile, FarmerProfile, Appointment, Notification, Favorite, CoinReward, PlatformCoin
 
 # Django timezone import
 from django.utils import timezone
@@ -76,109 +76,33 @@ def signup(request):
         CoinReward.objects.create(user=user, coins=bonus_coins)
 
         return JsonResponse({"message": "User created successfully!"}, status=201)
-    elif request.method == 'PUT':
+
+@csrf_exempt
+def update_profile(request):
+    if request.method == 'PATCH':
         data = json.loads(request.body)
-        
-        # Retrieve the user by the user ID or username (authentication needed)
-        user_id = data.get('user_id')
-        user = User.objects.filter(id=user_id).first()
+
+        # Retrieve user by username
+        username = data.get('username')
+        user = User.objects.filter(username=username).first()
 
         if not user:
             return JsonResponse({"error": "User not found."}, status=404)
-        
-        # Update basic user fields
-        username = data.get('username')
-        email = data.get('email')
-        password = data.get('password')
+
+        # Extract location fields
         location_lat = data.get('location_lat')
         location_lng = data.get('location_lng')
 
-        if username:
-            user.username = username
-        if email:
-            user.email = email
-        if password:
-            user.password = make_password(password)  # Hash the new password
+        # Only allow updating of location fields
         if location_lat is not None:
             user.location_lat = location_lat
         if location_lng is not None:
             user.location_lng = location_lng
-        
+
+        # Save the updated user with new location data
         user.save()
 
-        # Update profile-specific fields for veterinarians or farmers
-        if user.is_vet:
-            vet_profile = VeterinarianProfile.objects.filter(user=user).first()
-            if vet_profile:
-                certification_id = data.get('certification_id')
-                bio = data.get('bio')
-                if certification_id:
-                    vet_profile.certification_id = certification_id
-                if bio:
-                    vet_profile.bio = bio
-                vet_profile.save()
-
-        elif user.is_farmer:
-            farmer_profile = FarmerProfile.objects.filter(user=user).first()
-            if farmer_profile:
-                farm_name = data.get('farm_name')
-                if farm_name:
-                    farmer_profile.farm_name = farm_name
-                farmer_profile.save()
-
-        return JsonResponse({"message": "Profile updated successfully!"}, status=200)
-
-    elif request.method == 'PATCH':
-        data = json.loads(request.body)
-        
-        # Retrieve the user by the user ID or username (authentication needed)
-        user_id = data.get('user_id')
-        user = User.objects.filter(id=user_id).first()
-
-        if not user:
-            return JsonResponse({"error": "User not found."}, status=404)
-        
-        # Partially update user fields (only the ones that are present in the request)
-        username = data.get('username')
-        email = data.get('email')
-        password = data.get('password')
-        location_lat = data.get('location_lat')
-        location_lng = data.get('location_lng')
-
-        if username:
-            user.username = username
-        if email:
-            user.email = email
-        if password:
-            user.password = make_password(password)  # Hash the new password
-        if location_lat is not None:
-            user.location_lat = location_lat
-        if location_lng is not None:
-            user.location_lng = location_lng
-        
-        user.save()
-
-        # Partially update profile-specific fields for veterinarians or farmers
-        if user.is_vet:
-            vet_profile = VeterinarianProfile.objects.filter(user=user).first()
-            if vet_profile:
-                certification_id = data.get('certification_id')
-                bio = data.get('bio')
-                if certification_id:
-                    vet_profile.certification_id = certification_id
-                if bio:
-                    vet_profile.bio = bio
-                vet_profile.save()
-
-        elif user.is_farmer:
-            farmer_profile = FarmerProfile.objects.filter(user=user).first()
-            if farmer_profile:
-                farm_name = data.get('farm_name')
-                if farm_name:
-                    farmer_profile.farm_name = farm_name
-                farmer_profile.save()
-
-        return JsonResponse({"message": "Profile updated successfully!"}, status=200)
+        return JsonResponse({"message": "Location updated successfully!"}, status=200)
 
     return JsonResponse({"error": "Invalid request method."}, status=405)
 
@@ -217,43 +141,39 @@ def login(request):
 @csrf_exempt
 def appointments(request):
     if request.method == 'GET':
-        user_id = request.GET.get('user_id')
-        role = request.GET.get('role')
+        username = request.GET.get('username')
 
-        if not user_id or not role:
-            return HttpResponseBadRequest("Missing user_id or role")
+        if not username:
+            return HttpResponseBadRequest("Missing username")
 
-        user = get_object_or_404(User, pk=user_id)
-        if role == 'farmer':
-            appointments = Appointment.objects.filter(farmer=user).order_by('-appointment_date')
+        # Retrieve the user by username
+        user = get_object_or_404(User, username=username)
+
+        if user.is_farmer:
+            appointments = Appointment.objects.filter(farmer=user).order_by('-time_sent')
+        elif user.is_vet:
+            appointments = Appointment.objects.filter(vet=user).order_by('-time_sent')
         else:
-            appointments = Appointment.objects.filter(vet=user).order_by('-appointment_date')
+            return HttpResponseBadRequest("User is neither a farmer nor a vet")
 
         data = [
             {
-                'id': a.id,
-                'farmer': a.farmer.username,
-                'vet': a.vet.username,
-                'appointment_date': a.appointment_date,
-                'status': a.status,
-                'location_lat': a.location_lat,
-                'location_lng': a.location_lng,
+                
                 'farmer_note': a.farmer_note,
+                'status': a.status,
+                'vet': a.vet.username,
                 'vet_note': a.vet_note,
-                'vet_status_updated_at': a.vet_status_updated_at,
+                'time_sent': a.time_sent,
             } for a in appointments
         ]
         return JsonResponse(data, safe=False)
+
     elif request.method == 'POST':
         data = json.loads(request.body)
         try:
             # Fetch the farmer and vet using their usernames
             farmer = User.objects.get(username=data['farmer_username'])
             vet = User.objects.get(username=data['vet_username'])
-
-            # Check if the farmer has location data
-            location_lat = farmer.location_lat
-            location_lng = farmer.location_lng
 
             # Handle coin balances
             farmer_coins, _ = CoinReward.objects.get_or_create(user=farmer)
@@ -273,9 +193,6 @@ def appointments(request):
             appointment = Appointment.objects.create(
                 farmer=farmer,
                 vet=vet,
-                appointment_date=timezone.now(),  # Set to current timestamp
-                location_lat=location_lat,  # Use the farmer's stored location
-                location_lng=location_lng,  # Use the farmer's stored location
                 farmer_note=data.get('farmer_note', '')
             )
 
@@ -292,21 +209,31 @@ def appointments(request):
             return JsonResponse({'message': 'Appointment created', 'id': appointment.id})
         except Exception as e:
             return HttpResponseBadRequest(str(e))
-    elif request.method == 'PUT':
+    elif request.method == 'PATCH':
         data = json.loads(request.body)
         appointment_id = data.get('appointment_id')
         status = data.get('status')
         vet_note = data.get('vet_note')
-        vet_id = data.get('vet_id')
+        vet_username = data.get('username')
 
-        if not appointment_id or not status or not vet_note or not vet_id:
-            return HttpResponseBadRequest("Missing appointment_id, status, vet_note, or vet_id.")
+        if not appointment_id or not status or not vet_note or not vet_username:
+            return HttpResponseBadRequest("Missing appointment_id, status, vet_note, or vet_username.")
 
+        # Get the vet user object
+        vet = get_object_or_404(User, username=vet_username)
+
+        # Ensure the user is a vet
+        if not vet.is_vet:
+            return JsonResponse({"error": "User is not a veterinarian."}, status=403)
+
+        # Get the appointment
         appointment = get_object_or_404(Appointment, id=appointment_id)
 
-        if appointment.vet.id != vet_id:
+        # Ensure this vet is the one assigned to the appointment
+        if appointment.vet != vet:
             return JsonResponse({"error": "This is not your appointment to update."}, status=403)
 
+        # Update appointment
         appointment.status = status
         appointment.vet_note = vet_note
 
@@ -319,8 +246,13 @@ def appointments(request):
             recipient=appointment.farmer,
             message=f"Your appointment with {appointment.vet.username} has been updated. Status: {status}"
         )
+        Notification.objects.create(
+            recipient=appointment.vet,
+            message=f"Your appointment with {appointment.farmer.username} has been updated. Status: {status}"
+        )
 
         return JsonResponse({'message': 'Appointment updated successfully', 'id': appointment.id})
+
 
     return HttpResponseNotAllowed(['GET', 'POST', 'PUT'])
 
@@ -373,53 +305,6 @@ def mark_notification_as_read(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
 
     return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
-
-@csrf_exempt
-def rate_vet(request):
-    if request.method == 'POST':
-        data = json.loads(request.body)
-        try:
-            appointment = Appointment.objects.get(pk=data['appointment_id'])
-            farmer = User.objects.get(pk=data['farmer_id'])
-            vet = User.objects.get(pk=data['vet_id'])
-
-            Rating.objects.create(
-                appointment=appointment,
-                farmer=farmer,
-                vet=vet,
-                rating=data['rating'],
-                review=data.get('review', '')
-            )
-            return JsonResponse({'message': 'Rating submitted'})
-        except Exception as e:
-            return HttpResponseBadRequest(str(e))
-
-    elif request.method == 'GET':
-        vet_id = request.GET.get('vet_id')
-        if not vet_id:
-            return HttpResponseBadRequest("Missing vet_id parameter")
-
-        try:
-            vet = User.objects.get(pk=vet_id)
-            ratings = Rating.objects.filter(vet=vet)
-
-            data = [
-                {
-                    'appointment_id': r.appointment.id,
-                    'farmer': r.farmer.username,
-                    'rating': r.rating,
-                    'review': r.review,
-                    'created_at': r.created_at
-                } for r in ratings
-            ]
-            return JsonResponse(data, safe=False)
-
-        except User.DoesNotExist:
-            return HttpResponseBadRequest("Vet not found")
-        except Exception as e:
-            return HttpResponseBadRequest(str(e))
-
-    return HttpResponseNotAllowed(['GET', 'POST'])
 
 @csrf_exempt
 def nearby_vets(request):

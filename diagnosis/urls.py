@@ -3,7 +3,6 @@ from .views import (
     signup,
     login,
     appointments,
-    rate_vet,
     nearby_vets,
     predict_disease,
     deposit_coins,
@@ -13,14 +12,15 @@ from .views import (
     favorite_vets,
     add_favorite,
     get_notifications,
-    mark_notification_as_read
+    mark_notification_as_read,
+    update_profile
 )
 
 urlpatterns = [
     path('signup/', signup, name="signup"),
     path('login/', login, name="login"),
-    path('appointments/', appointments, name="appointments_list"),
-    path('ratings/', rate_vet, name="rate_vet"),
+    path('update-profile/', update_profile, name="update-profile"),
+    path('appointments/', appointments, name="appointments"),
     path('nearby-vets/', nearby_vets, name="nearby-vets"),
     path("predict-disease/", predict_disease, name="predict-disease"),
     path("deposit-coins/", deposit_coins, name="deposit-coins"),
