@@ -1,7 +1,8 @@
 from django.urls import path
 from .views import (
     signup,
-    login,
+    vet_login,
+    farmer_login,
     appointments,
     nearby_vets,
     predict_disease,
@@ -18,7 +19,8 @@ from .views import (
 
 urlpatterns = [
     path('signup/', signup, name="signup"),
-    path('login/', login, name="login"),
+    path('vet-login/', vet_login, name="vet-login"),
+    path('farmer-login/', farmer_login, name="farmer-login"),
     path('update-profile/', update_profile, name="update-profile"),
     path('appointments/', appointments, name="appointments"),
     path('nearby-vets/', nearby_vets, name="nearby-vets"),

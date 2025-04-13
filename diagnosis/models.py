@@ -42,7 +42,7 @@ class Appointment(models.Model):
     id = models.AutoField(primary_key=True)
     STATUS_CHOICES = [
         ('pending', 'Pending'),
-        ('accepted', 'Accepted'),
+        ('approved', 'Approved'),
         ('cancelled', 'Cancelled')
     ]
 

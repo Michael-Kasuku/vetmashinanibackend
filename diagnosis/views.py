@@ -107,36 +107,61 @@ def update_profile(request):
     return JsonResponse({"error": "Invalid request method."}, status=405)
 
 @csrf_exempt
-def login(request):
+def vet_login(request):
     if request.method == 'POST':
         data = json.loads(request.body)
 
         username = data.get('username')
         password = data.get('password')
 
-        # Authenticate user
         try:
-            user = User.objects.get(username=username)
+            user = User.objects.get(username=username, is_vet=True)
         except User.DoesNotExist:
-            return JsonResponse({"error": "Invalid username or password."}, status=400)
+            return JsonResponse({"error": "Invalid vet credentials."}, status=400)
 
-        # Check if the password matches
         if not check_password(password, user.password):
-            return JsonResponse({"error": "Invalid username or password."}, status=400)
+            return JsonResponse({"error": "Invalid password."}, status=400)
 
-        # If successful, return user info (you can add a token for authentication here)
         response_data = {
             "username": user.username,
             "email": user.email,
-            "is_farmer": user.is_farmer,
             "is_vet": user.is_vet,
             "location_lat": user.location_lat,
             "location_lng": user.location_lng
         }
 
-        return JsonResponse({"message": "Login successful", "user": response_data}, status=200)
+        return JsonResponse({"message": "Vet login successful", "user": response_data}, status=200)
 
     return JsonResponse({"error": "Invalid request method."}, status=405)
+
+@csrf_exempt
+def farmer_login(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+
+        username = data.get('username')
+        password = data.get('password')
+
+        try:
+            user = User.objects.get(username=username, is_farmer=True)
+        except User.DoesNotExist:
+            return JsonResponse({"error": "Invalid farmer credentials."}, status=400)
+
+        if not check_password(password, user.password):
+            return JsonResponse({"error": "Invalid password."}, status=400)
+
+        response_data = {
+            "username": user.username,
+            "email": user.email,
+            "is_farmer": user.is_farmer,
+            "location_lat": user.location_lat,
+            "location_lng": user.location_lng
+        }
+
+        return JsonResponse({"message": "Farmer login successful", "user": response_data}, status=200)
+
+    return JsonResponse({"error": "Invalid request method."}, status=405)
+
 
 @csrf_exempt
 def appointments(request):
@@ -158,7 +183,8 @@ def appointments(request):
 
         data = [
             {
-                
+                'id': a.id,
+                'farmer': a.farmer.username,   
                 'farmer_note': a.farmer_note,
                 'status': a.status,
                 'vet': a.vet.username,
@@ -199,7 +225,7 @@ def appointments(request):
             # Send notifications
             Notification.objects.create(
                 recipient=vet,
-                message=f"New appointment created with {farmer.username}"
+                message=f"{farmer.username} has scheduled new appointment with you."
             )
             Notification.objects.create(
                 recipient=farmer,
@@ -237,7 +263,7 @@ def appointments(request):
         appointment.status = status
         appointment.vet_note = vet_note
 
-        if status in ['accepted', 'cancelled']:
+        if status in ['approved', 'cancelled']:
             appointment.vet_status_updated_at = timezone.now()
 
         appointment.save()
